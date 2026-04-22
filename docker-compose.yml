@@ -1,31 +1,11 @@
 version: '3.8'
-
 services:
   backend:
     build: ../backend
     container_name: havit-backend
     ports:
       - "3000:3000"
-    depends_on:
-      - db
-    environment:
-      DATABASE_URL: postgres://user:password@db:5432/mydb
-    volumes:
-      - ../backend:/app
+    env_file:
+      - .env
+    restart: unless-stopped
     command: npm run start:dev
-
-  db:
-    image: postgres:15
-    container_name: havit-db
-    restart: always
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: mydb
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
