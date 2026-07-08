@@ -8,4 +8,4 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    command: npm run start:dev
+    command: sh -c "npm run db:migrate && npm run start:dev"
