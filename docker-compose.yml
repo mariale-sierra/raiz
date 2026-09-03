@@ -1,4 +1,19 @@
 version: '3.8'
+
+# Havit local/dev stack.
+#
+# The database is NOT a local container: every environment (this compose and
+# the deployed Azure container) talks to the shared Azure Database for
+# PostgreSQL instance configured via .env (DB_HOST/DB_USERNAME/DB_PASSWORD/
+# DB_DATABASE/DB_PORT). Do not add a local `db` service that shadows it, and
+# never point destructive commands at that shared instance.
+#
+# Startup order is enforced by the command itself:
+#   1. `npm run db:migrate` waits for the DB to be reachable (retry loop in
+#      backend/database/scripts/lib.js), applies only pending files inside
+#      transactions, and exits non-zero if any migration fails.
+#   2. The API starts only after step 1 succeeds.
+# `restart: unless-stopped` retries the whole sequence if the DB was down.
 services:
   backend:
     build: ../backend
