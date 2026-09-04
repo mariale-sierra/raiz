@@ -31,7 +31,14 @@ services:
     volumes:
       - havit_db_local:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME}']
+      # -d is required: without it, pg_isready (via libpq's default) tries to
+      # connect to a database named after the USER (${DB_USERNAME}, e.g.
+      # "havitadmin"), which doesn't exist — POSTGRES_DB creates a database
+      # named ${DB_DATABASE} ("havit"), not one named after the user. That
+      # mismatch didn't break the healthcheck itself (pg_isready still saw
+      # the server responding and reported healthy), but it spammed the logs
+      # with a recurring "FATAL: database ... does not exist" every interval.
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}']
       interval: 5s
       timeout: 5s
       retries: 10
