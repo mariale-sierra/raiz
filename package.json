@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "dev:server": "docker compose up --build",
+    "dev:local": "docker compose -f docker-compose.yml -f docker-compose.local.yml up --build"
+  },
   "devDependencies": {
     "@nestjs/cli": "^11.0.16"
   }

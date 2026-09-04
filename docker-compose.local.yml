@@ -1,0 +1,55 @@
+# Local-only override. Adds a local Postgres container and points `backend`
+# at it instead of the shared Azure instance. Always combine with the base
+# file — never run this one alone:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#   (or: npm run dev:local)
+#
+# docker-compose.yml itself is untouched, so `docker compose up` /
+# `npm run dev:server` alone still targets Azure exactly as before.
+#
+# DB_USERNAME/DB_PASSWORD/DB_DATABASE are read from `.env` (docker compose's
+# built-in variable substitution loads it the same way docker-compose.yml's
+# `env_file: .env` loads it into the backend container) purely to seed the
+# local Postgres user/db — nothing Azure-specific leaves this machine.
+services:
+  db:
+    image: postgres:16
+    container_name: havit-db-local
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE}
+    ports:
+      # Host 5434, not 5432: avoids clashing with any other local Postgres
+      # already running on the host. `backend` still talks to this DB over
+      # the internal Docker network as `db:5432`, unaffected by this
+      # mapping — it's only there for connecting a host-side DB client
+      # (psql, a GUI tool) to `localhost:5434` if you need to inspect data.
+      # If 5434 is also taken on your machine, change only this number.
+      - '5434:5432'
+    volumes:
+      - havit_db_local:/var/lib/postgresql/data
+    healthcheck:
+      # -d is required: without it, pg_isready (via libpq's default) tries to
+      # connect to a database named after the USER (${DB_USERNAME}, e.g.
+      # "havitadmin"), which doesn't exist — POSTGRES_DB creates a database
+      # named ${DB_DATABASE} ("havit"), not one named after the user. That
+      # mismatch didn't break the healthcheck itself (pg_isready still saw
+      # the server responding and reported healthy), but it spammed the logs
+      # with a recurring "FATAL: database ... does not exist" every interval.
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_SSL: 'false'
+
+volumes:
+  havit_db_local:
