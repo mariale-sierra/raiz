@@ -17,7 +17,7 @@ jobs:
             git fetch origin main
             git checkout main
             git merge --ff-only origin/main
-            docker compose up -d --build
+            docker-compose up -d --build
           '
 
       - name: Verificar que el backend responde
