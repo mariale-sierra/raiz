@@ -8,7 +8,8 @@ version: '3.8'
 # DB_DATABASE/DB_PORT). Do not add a local `db` service that shadows it, and
 # never point destructive commands at that shared instance.
 #
-# Startup order is enforced by the command itself:
+# Startup order is enforced by npm's "predev" hook (backend/package.json),
+# the single source of truth shared with backend/Dockerfile's "prestart":
 #   1. `npm run db:migrate` waits for the DB to be reachable (retry loop in
 #      backend/database/scripts/lib.js), applies only pending files inside
 #      transactions, and exits non-zero if any migration fails.
@@ -23,4 +24,4 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    command: sh -c "npm run db:migrate && npm run start:dev"
+    command: npm run dev
