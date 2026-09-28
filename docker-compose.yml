@@ -23,5 +23,31 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      # REDIS_URL is optional read-through-cache infra (B6), not the source
+      # of truth — RedisCacheService fails open (falls back to Postgres) if
+      # it's unset or Redis is unreachable, and `redis` below has no
+      # healthcheck gate on `backend` for the same reason: a slow/failed
+      # Redis must never delay or block the API starting. Override this in
+      # .env if you point at a different Redis (e.g. Azure Cache for Redis).
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     restart: unless-stopped
     command: npm run dev
+
+  redis:
+    image: redis:7-alpine
+    container_name: havit-redis
+    # No host port published by default — only the backend container talks to
+    # it, over the internal Docker network as `redis:6379`. Uncomment if you
+    # need a host-side client (redis-cli, a GUI tool) to inspect it directly.
+    # ports:
+    #   - "6379:6379"
+    # No volume: this is a cache, not a store of record. An empty cache after
+    # a restart is a cold-cache miss (slower, still correct), not data loss —
+    # see backend/performance/REDIS.md.
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
