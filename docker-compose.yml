@@ -31,8 +31,57 @@ services:
       # Redis must never delay or block the API starting. Override this in
       # .env if you point at a different Redis (e.g. Azure Cache for Redis).
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      # B1: set DB_POOL_HOST/DB_POOL_PORT in .env (not here) to route the
+      # app's runtime TypeORM connection through `pgbouncer` below instead of
+      # connecting to Postgres directly — optional, same zero-risk/env-gated
+      # rollout as REDIS_URL (unset = old direct connection). Deliberately
+      # NOT redeclared here with a `${VAR:-}` fallback: that would set the
+      # container's env var to an actual empty string when unset in .env,
+      # which app.module.ts's `||` check treats the same as unset today, but
+      # would silently break again if that ever changed back to `??` — env_file
+      # below already passes these through untouched when present.
+      # `backend`'s own migration runner (database/scripts/migrate.js, run
+      # via the prestart/predev npm hooks) always uses DB_HOST/DB_PORT
+      # directly, bypassing the pool — see backend/performance/B1-PGBOUNCER.md.
     restart: unless-stopped
     command: npm run dev
+
+  # B1: connection pooling between `backend` and the shared Azure Postgres.
+  # Opt-in — only takes effect once DB_POOL_HOST/DB_POOL_PORT (above) point
+  # `backend` at it; leaving those unset keeps the pre-B1 direct-connection
+  # behavior with this container simply unused. See
+  # backend/performance/B1-PGBOUNCER.md for the pool_mode/TLS rationale and
+  # the Azure max_connections sizing note.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    container_name: havit-pgbouncer
+    environment:
+      # edoburu/pgbouncer generates pgbouncer.ini + a hashed userlist.txt
+      # from this at container start — the real Azure password never lands
+      # in a committed file, same convention as every other secret here.
+      DATABASE_URL: postgresql://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_DATABASE}
+      LISTEN_ADDR: '0.0.0.0'
+      LISTEN_PORT: '6432'
+      # Transaction pooling: this is a stateless REST API with no
+      # LISTEN/NOTIFY, no session-level SET, no advisory locks spanning a
+      # request — the standard case where transaction pooling is safe and
+      # gives the real multiplexing win (many client connections sharing a
+      # much smaller pool of real Postgres connections).
+      POOL_MODE: transaction
+      # Azure Database for PostgreSQL requires TLS for every connection —
+      # keep this at its default `require` for any real deployment. Override
+      # to `disable` in .env ONLY for a local, non-TLS Postgres (e.g. B6's
+      # local `havit_perf` benchmark setup).
+      SERVER_TLS_SSLMODE: ${PGBOUNCER_SERVER_TLS_SSLMODE:-require}
+      # Conservative starting point — MUST be revisited once Azure's real
+      # max_connections is checked (Azure Portal, outside this repo). See
+      # backend/performance/B1-PGBOUNCER.md's sizing formula.
+      MAX_CLIENT_CONN: '200'
+      DEFAULT_POOL_SIZE: '20'
+      ADMIN_USERS: ${DB_USERNAME}
+    # No host port published — only `backend` talks to this over the
+    # internal Docker network as `pgbouncer:6432`, same convention as `redis`.
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
