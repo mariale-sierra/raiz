@@ -68,6 +68,14 @@ services:
       # gives the real multiplexing win (many client connections sharing a
       # much smaller pool of real Postgres connections).
       POOL_MODE: transaction
+      # Azure Postgres authenticates with SCRAM-SHA-256. The image's default
+      # (md5) stores only an MD5 hash in userlist.txt, which PgBouncer cannot
+      # use to answer Azure's SCRAM challenge ("cannot do SCRAM
+      # authentication: wrong password type" — found live on the VM). With
+      # scram-sha-256 the entrypoint keeps the plain password in userlist.txt
+      # (inside this container only, same exposure as DATABASE_URL above) and
+      # the app <-> pooler hop also authenticates with SCRAM.
+      AUTH_TYPE: scram-sha-256
       # Azure Database for PostgreSQL requires TLS for every connection —
       # keep this at its default `require` for any real deployment. Override
       # to `disable` in .env ONLY for a local, non-TLS Postgres (e.g. B6's
