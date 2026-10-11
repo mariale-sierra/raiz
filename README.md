@@ -29,6 +29,10 @@ The local Postgres starts empty, so the backend's migration runner (`npm run db:
 
 The API is reachable at `http://localhost:3000` on this machine, and at `http://<this machine's LAN IP>:3000` from another device on the same WiFi (e.g. a teammate's phone running Expo — see `frontend/README.md`'s "Running against a local backend" section, which detects that IP automatically).
 
+## Connection pooling (PgBouncer, opt-in)
+
+`docker-compose.yml` always starts a `pgbouncer` container pointed at whatever `DB_HOST`/`DB_USERNAME`/`DB_PASSWORD`/`DB_DATABASE` your `.env` already has (Azure in Option A), but `backend` only routes through it when you also set `DB_POOL_HOST=pgbouncer`/`DB_POOL_PORT=6432` in `.env` — unset (the default) keeps the pre-existing direct-to-Postgres connection, with the `pgbouncer` container simply idle. See `backend/performance/B1-PGBOUNCER.md` for why (pool_mode, TLS to Azure, pool sizing) and the Azure `max_connections` check it still needs from the portal.
+
 ## Notes
 
 - The local Postgres is published on host port `5434` (not `5432`), specifically to avoid clashing with any other Postgres you might already have running locally for other projects. The backend still reaches it internally as `db:5432` inside the Docker network regardless. Connect a DB client to `localhost:5434` if you need to inspect the local data directly. If `5434` is also taken on your machine, change only that number in `docker-compose.local.yml`.
