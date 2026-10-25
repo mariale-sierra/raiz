@@ -8,8 +8,13 @@ version: '3.8'
 # DB_DATABASE/DB_PORT). Do not add a local `db` service that shadows it, and
 # never point destructive commands at that shared instance.
 #
-# Startup order is enforced by npm's "predev" hook (backend/package.json),
-# the single source of truth shared with backend/Dockerfile's "prestart":
+# B6: `backend` builds the Dockerfile's `prod` target (non-root, production
+# deps only, HEALTHCHECK on GET /health) and runs its `npm start` — this file
+# is what the VM deploys. docker-compose.local.yml switches to the `dev`
+# target (`npm run dev`); BACKEND_TARGET=dev does the same against Azure.
+#
+# Startup order is enforced by npm's "prestart" hook (backend/package.json),
+# the single source of truth shared with the dev target's "predev":
 #   1. `npm run db:migrate` waits for the DB to be reachable (retry loop in
 #      backend/database/scripts/lib.js), applies only pending files inside
 #      transactions, and exits non-zero if any migration fails.
@@ -17,14 +22,16 @@ version: '3.8'
 # `restart: unless-stopped` retries the whole sequence if the DB was down.
 services:
   backend:
-    build: ../backend
+    build:
+      context: ../backend
+      target: ${BACKEND_TARGET:-prod}
     container_name: havit-backend
     ports:
       # B3: the public entry point is `caddy` (443, HTTPS). Port 3000 stays
       # published only so already-installed HTTP APKs keep working during
       # the transition; once every client is on HTTPS set
       # BACKEND_BIND_ADDR=127.0.0.1 in .env (host-only: the deploy health
-      # check `curl http://localhost:3000/` keeps working) AND remove 3000
+      # check `curl http://localhost:3000/health` keeps working) AND remove 3000
       # from the Azure NSG. Caddy itself reaches `backend:3000` over the
       # Docker network either way. See backend/docs/sprint-10/B3-https-transporte.md.
       - "${BACKEND_BIND_ADDR:-0.0.0.0}:3000:3000"
@@ -45,7 +52,7 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-loopback,uniquelocal}
       # B3: verify Azure Postgres' certificate against the Azure root CAs
       # committed in the backend repo (copied into the image by the
-      # Dockerfile's `COPY . .`). Used by the app (direct connection) and the
+      # Dockerfile's `COPY certs`). Used by the app (direct connection) and the
       # migration runner. Irrelevant when DB_SSL=false (docker-compose.local.yml).
       DB_SSL_CA_PATH: ${DB_SSL_CA_PATH:-/app/certs/azure-postgres-root-cas.pem}
       # B1: set DB_POOL_HOST/DB_POOL_PORT in .env (not here) to route the
@@ -61,7 +68,6 @@ services:
       # via the prestart/predev npm hooks) always uses DB_HOST/DB_PORT
       # directly, bypassing the pool — see backend/performance/B1-PGBOUNCER.md.
     restart: unless-stopped
-    command: npm run dev
 
   # B1: connection pooling between `backend` and the shared Azure Postgres.
   # Opt-in — only takes effect once DB_POOL_HOST/DB_POOL_PORT (above) point

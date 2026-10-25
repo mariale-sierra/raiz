@@ -44,6 +44,11 @@ services:
       retries: 10
 
   backend:
+    # B6: local development runs the Dockerfile's `dev` target (`npm run
+    # dev`: devDependencies + nest --watch) instead of the production one.
+    build:
+      context: ../backend
+      target: dev
     depends_on:
       db:
         condition: service_healthy

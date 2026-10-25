@@ -33,6 +33,10 @@ The API is reachable at `http://localhost:3000` on this machine, and at `http://
 
 `docker-compose.yml` always starts a `pgbouncer` container pointed at whatever `DB_HOST`/`DB_USERNAME`/`DB_PASSWORD`/`DB_DATABASE` your `.env` already has (Azure in Option A), but `backend` only routes through it when you also set `DB_POOL_HOST=pgbouncer`/`DB_POOL_PORT=6432` in `.env` — unset (the default) keeps the pre-existing direct-to-Postgres connection, with the `pgbouncer` container simply idle. See `backend/performance/B1-PGBOUNCER.md` for why (pool_mode, TLS to Azure, pool sizing) and the Azure `max_connections` check it still needs from the portal.
 
+## Backend image targets (Sprint 10 B6)
+
+`backend/Dockerfile` is multi-stage. `docker-compose.yml` builds its **`prod`** target — non-root (`node`), production dependencies only, `npm start`, Docker `HEALTHCHECK` on `GET /health` — because this same file is what the VM deploys. `docker-compose.local.yml` (Option B) switches to the **`dev`** target (`npm run dev`, devDependencies, `nest --watch`). To run the `dev` target against Azure (Option A), set `BACKEND_TARGET=dev`. See `backend/docs/sprint-10/B6-despliegue-seguro-cicd.md`.
+
 ## Notes
 
 - The local Postgres is published on host port `5434` (not `5432`), specifically to avoid clashing with any other Postgres you might already have running locally for other projects. The backend still reaches it internally as `db:5432` inside the Docker network regardless. Connect a DB client to `localhost:5434` if you need to inspect the local data directly. If `5434` is also taken on your machine, change only that number in `docker-compose.local.yml`.
