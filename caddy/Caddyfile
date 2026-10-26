@@ -1,0 +1,26 @@
+# B3 (sprint 10): HTTPS in front of the Havit API.
+#
+# Caddy gets and renews the certificate on its own (Let's Encrypt, falling
+# back to ZeroSSL) as soon as API_DOMAIN resolves to this VM and ports 80/443
+# are open in the Azure NSG. Plain HTTP on :80 answers 308 -> https:// (Caddy's
+# automatic redirect; :80 also serves the ACME HTTP-01 challenge).
+#
+# API_DOMAIN unset (local `docker compose up`) = `localhost` with a cert from
+# Caddy's internal CA: curl -k https://localhost:${CADDY_HTTPS_PORT}/
+{
+	# Never try to install the internal CA into the container's trust store.
+	skip_install_trust
+}
+
+{$API_DOMAIN:localhost} {
+	# No `encode gzip/zstd` on purpose: responses carry JWTs next to
+	# user-supplied text (BREACH), and the API never compressed before B3.
+
+	# No trusted_proxies here on purpose: Caddy then IGNORES any
+	# X-Forwarded-For the client sends and sets it to the real peer address.
+	# Nest trusts this single hop (TRUST_PROXY in docker-compose.yml), so
+	# req.ip — and the rate limiter — sees each user's own IP.
+	reverse_proxy backend:3000
+
+	log
+}

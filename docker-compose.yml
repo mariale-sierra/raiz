@@ -8,8 +8,13 @@ version: '3.8'
 # DB_DATABASE/DB_PORT). Do not add a local `db` service that shadows it, and
 # never point destructive commands at that shared instance.
 #
-# Startup order is enforced by npm's "predev" hook (backend/package.json),
-# the single source of truth shared with backend/Dockerfile's "prestart":
+# B6: `backend` builds the Dockerfile's `prod` target (non-root, production
+# deps only, HEALTHCHECK on GET /health) and runs its `npm start` — this file
+# is what the VM deploys. docker-compose.local.yml switches to the `dev`
+# target (`npm run dev`); BACKEND_TARGET=dev does the same against Azure.
+#
+# Startup order is enforced by npm's "prestart" hook (backend/package.json),
+# the single source of truth shared with the dev target's "predev":
 #   1. `npm run db:migrate` waits for the DB to be reachable (retry loop in
 #      backend/database/scripts/lib.js), applies only pending files inside
 #      transactions, and exits non-zero if any migration fails.
@@ -17,10 +22,19 @@ version: '3.8'
 # `restart: unless-stopped` retries the whole sequence if the DB was down.
 services:
   backend:
-    build: ../backend
+    build:
+      context: ../backend
+      target: ${BACKEND_TARGET:-prod}
     container_name: havit-backend
     ports:
-      - "3000:3000"
+      # B3: the public entry point is `caddy` (443, HTTPS). Port 3000 stays
+      # published only so already-installed HTTP APKs keep working during
+      # the transition; once every client is on HTTPS set
+      # BACKEND_BIND_ADDR=127.0.0.1 in .env (host-only: the deploy health
+      # check `curl http://localhost:3000/health` keeps working) AND remove 3000
+      # from the Azure NSG. Caddy itself reaches `backend:3000` over the
+      # Docker network either way. See backend/docs/sprint-10/B3-https-transporte.md.
+      - "${BACKEND_BIND_ADDR:-0.0.0.0}:3000:3000"
     env_file:
       - .env
     environment:
@@ -31,6 +45,16 @@ services:
       # Redis must never delay or block the API starting. Override this in
       # .env if you point at a different Redis (e.g. Azure Cache for Redis).
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      # B3: req.ip (and the rate limiter) must be the real client, not Caddy.
+      # Only hops coming from loopback/private addresses (Caddy on the Docker
+      # network) are believed; a client hitting :3000 directly arrives with
+      # its public IP, so a forged X-Forwarded-For from it is ignored.
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,uniquelocal}
+      # B3: verify Azure Postgres' certificate against the Azure root CAs
+      # committed in the backend repo (copied into the image by the
+      # Dockerfile's `COPY certs`). Used by the app (direct connection) and the
+      # migration runner. Irrelevant when DB_SSL=false (docker-compose.local.yml).
+      DB_SSL_CA_PATH: ${DB_SSL_CA_PATH:-/app/certs/azure-postgres-root-cas.pem}
       # B1: set DB_POOL_HOST/DB_POOL_PORT in .env (not here) to route the
       # app's runtime TypeORM connection through `pgbouncer` below instead of
       # connecting to Postgres directly — optional, same zero-risk/env-gated
@@ -44,7 +68,6 @@ services:
       # via the prestart/predev npm hooks) always uses DB_HOST/DB_PORT
       # directly, bypassing the pool — see backend/performance/B1-PGBOUNCER.md.
     restart: unless-stopped
-    command: npm run dev
 
   # B1: connection pooling between `backend` and the shared Azure Postgres.
   # Opt-in — only takes effect once DB_POOL_HOST/DB_POOL_PORT (above) point
@@ -76,19 +99,55 @@ services:
       # (inside this container only, same exposure as DATABASE_URL above) and
       # the app <-> pooler hop also authenticates with SCRAM.
       AUTH_TYPE: scram-sha-256
-      # Azure Database for PostgreSQL requires TLS for every connection —
-      # keep this at its default `require` for any real deployment. Override
-      # to `disable` in .env ONLY for a local, non-TLS Postgres (e.g. B6's
-      # local `havit_perf` benchmark setup).
-      SERVER_TLS_SSLMODE: ${PGBOUNCER_SERVER_TLS_SSLMODE:-require}
+      # Azure Database for PostgreSQL requires TLS for every connection.
+      # B3: `verify-full` checks the chain against the Azure root CAs below
+      # AND that the certificate matches DB_HOST — `require` only encrypted,
+      # so anyone on the VM -> Azure path could impersonate the database.
+      # Override to `disable` in .env ONLY for a local, non-TLS Postgres
+      # (e.g. B6's local `havit_perf` benchmark setup).
+      SERVER_TLS_SSLMODE: ${PGBOUNCER_SERVER_TLS_SSLMODE:-verify-full}
+      SERVER_TLS_CA_FILE: /etc/pgbouncer/certs/azure-postgres-root-cas.pem
       # Conservative starting point — MUST be revisited once Azure's real
       # max_connections is checked (Azure Portal, outside this repo). See
       # backend/performance/B1-PGBOUNCER.md's sizing formula.
       MAX_CLIENT_CONN: '200'
       DEFAULT_POOL_SIZE: '20'
       ADMIN_USERS: ${DB_USERNAME}
+    volumes:
+      # Same public root bundle the backend uses (no secrets in it). The
+      # backend checkout must already contain it (merge backend first).
+      - ../backend/certs/azure-postgres-root-cas.pem:/etc/pgbouncer/certs/azure-postgres-root-cas.pem:ro
     # No host port published — only `backend` talks to this over the
     # internal Docker network as `pgbouncer:6432`, same convention as `redis`.
+    restart: unless-stopped
+
+  # B3: HTTPS reverse proxy in front of `backend`. Gets/renews a Let's
+  # Encrypt certificate for API_DOMAIN (e.g. the Azure DNS label
+  # <label>.<region>.cloudapp.azure.com) and redirects HTTP -> HTTPS. Needs
+  # TCP 80 + 443 open in the Azure NSG. Config: caddy/Caddyfile.
+  caddy:
+    image: caddy:2.10.2-alpine
+    container_name: havit-caddy
+    depends_on:
+      - backend
+    ports:
+      # Overridable only so a dev machine that already uses 80/443 can still
+      # run the stack; on the VM keep the defaults (ACME needs 80/443).
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_PORT:-443}:443/udp"
+    environment:
+      # `:-localhost`, never `:-`: an empty string is still "set" for Caddy,
+      # so {$API_DOMAIN:localhost} would not fall back and the Caddyfile
+      # would not parse (found testing B3 locally).
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates + ACME account. MUST persist across deploys
+      # (`docker-compose down` keeps named volumes; never add -v): losing it
+      # means re-issuing on every deploy and hitting Let's Encrypt's limits.
+      - caddy_data:/data
+      - caddy_config:/config
     restart: unless-stopped
 
   redis:
@@ -108,3 +167,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
