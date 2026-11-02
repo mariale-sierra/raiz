@@ -7,6 +7,16 @@ Responsable: Ale Pérez · 2026-10-23. Documento principal, con todas las prueba
 `docker-compose.yml` agrega Caddy como proxy HTTPS delante de `backend`: certificado automático (Let's Encrypt) para `API_DOMAIN`, redirección 308 HTTP→HTTPS y `X-Forwarded-For` controlado por el proxy. PgBouncer pasa de `require` a `verify-full` contra las raíces de Azure. El 3000 queda publicado durante la transición y se cierra con `BACKEND_BIND_ADDR=127.0.0.1`.
 **Criterio: PARCIAL.** Configuración validada en un stack local equivalente; faltan la etiqueta DNS, el NSG (80/443), el despliegue y el cierre del 3000.
 
+> **Actualización 2026-10-27.** La etiqueta DNS, los puertos 80/443 y el despliegue ya están. `https://havit-api.canadacentral.cloudapp.azure.com` responde con un certificado válido de Let's Encrypt (vence el 2027-01-24) y HTTP redirige con 308. Solo falta **cerrar el 3000**, que sigue respondiendo desde fuera (`http://20.63.84.1:3000/health` → 200). Se espera a que haya un APK HTTPS distribuido. Evidencia en `backend/docs/sprint-10/evidencias-b3/verificacion-produccion-2026-10-27.txt`.
+>
+> **Para cerrarlo (no requiere cambiar código), cuando el APK nuevo esté repartido:**
+> 1. En la VM, agregar `BACKEND_BIND_ADDR=127.0.0.1` en `/home/azureuser/raiz/.env`. El `.env` no lo sobrescribe el deploy, así que el valor se conserva.
+> 2. `cd /home/azureuser/raiz && docker-compose up -d`. El health check del deploy usa `localhost:3000` y sigue funcionando.
+> 3. Quitar la regla de entrada del 3000 en el NSG de Azure, como segunda barrera.
+> 4. Comprobar desde fuera: `curl -m 10 http://20.63.84.1:3000/health` debe fallar por tiempo de espera o conexión rechazada, y `https://…/health` debe seguir respondiendo 200.
+>
+> No se cambió el valor por defecto del compose a `127.0.0.1`. Si se hiciera, el siguiente merge a `main` cerraría el 3000 sin aviso y dejaría sin servicio a los APK HTTP que todavía están instalados.
+
 ## 2. Decisiones técnicas
 
 - Caddy en lugar de Nginx+certbot, Cloudflare o Front Door: renovación y redirección automáticas, sin dominio propio ni costo extra.
